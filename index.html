@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ticketera · Control de atenciones</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎫</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🎫 Ticketera <span>Control de atenciones</span></div>
+    <nav>
+      <a href="#emitir" data-view="emitir">Emitir ticket</a>
+      <a href="#ventanilla" data-view="ventanilla">Ventanilla</a>
+      <a href="#pantalla" data-view="pantalla">Pantalla</a>
+      <a href="#reporte" data-view="reporte">Reporte</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Emisión de tickets (kiosko) -->
+    <section id="view-emitir" class="view">
+      <h1>Bienvenido</h1>
+      <p class="muted">Seleccione el tipo de atención para obtener su ticket.</p>
+      <label class="field">
+        Nombre (opcional)
+        <input id="customer-name" maxlength="40" placeholder="Ej. María Pérez" autocomplete="off">
+      </label>
+      <div id="service-buttons" class="service-grid"></div>
+      <div id="issued" class="issued hidden"></div>
+    </section>
+
+    <!-- Panel del operador -->
+    <section id="view-ventanilla" class="view">
+      <div class="card desk-config">
+        <label>Ventanilla <select id="desk-select"></select></label>
+        <fieldset id="desk-services"><legend>Atiende:</legend></fieldset>
+      </div>
+      <div class="desk-layout">
+        <div class="card current" id="desk-current"></div>
+        <div class="card">
+          <h2>En espera <span id="queue-count" class="badge">0</span></h2>
+          <ol id="desk-queue" class="queue"></ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pantalla pública -->
+    <section id="view-pantalla" class="view">
+      <div class="display">
+        <div class="display-main" id="display-main"></div>
+        <aside class="display-side">
+          <div class="clock" id="clock"></div>
+          <h2>Últimos llamados</h2>
+          <ul id="display-history" class="display-history"></ul>
+          <div id="display-waiting" class="display-waiting"></div>
+          <div class="display-actions">
+            <button id="sound-btn" class="btn ghost" type="button">🔇 Activar sonido</button>
+            <a class="btn ghost" href="?modo=pantalla#pantalla" target="_blank" rel="noopener">⛶ Abrir en ventana</a>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Reporte -->
+    <section id="view-reporte" class="view">
+      <div class="report-head">
+        <h1>Reporte del día</h1>
+        <div>
+          <button id="export-btn" class="btn" type="button">Exportar CSV</button>
+          <button id="reset-btn" class="btn danger" type="button">Reiniciar día</button>
+        </div>
+      </div>
+      <div id="stats" class="stats"></div>
+      <div class="card">
+        <h2>Por servicio</h2>
+        <div class="table-wrap"><table id="service-table"></table></div>
+      </div>
+      <div class="card">
+        <h2>Historial</h2>
+        <div class="table-wrap"><table id="history-table"></table></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Prototipo sin base de datos · los datos se guardan solo en este navegador (localStorage)</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
