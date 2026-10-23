@@ -1,8 +1,10 @@
 # 🎫 Ticketera · Control de atenciones
 
 Prototipo web para gestionar turnos de atención (tipo "toma tu número").
-Hecho solo con HTML, CSS y JavaScript: **no necesita servidor ni base de datos**.
-Los datos se guardan en el navegador (`localStorage`).
+Frontend en HTML, CSS y JavaScript puro; los datos se guardan en **SQLite** mediante un
+pequeño servidor en Python que **no necesita instalar dependencias**.
+
+> Rama `feature/sqlite`. La versión sin base de datos (solo navegador) está en `main`.
 
 ## Vistas
 
@@ -15,21 +17,51 @@ Los datos se guardan en el navegador (`localStorage`).
 
 Servicios incluidos: **Preferencial (P)** (tiene prioridad), **Atención general (A)** y **Caja (C)**.
 
+## Requisitos
+
+- Python 3.9 o superior (ya incluye `sqlite3`).
+
 ## Cómo usarlo
 
-1. Abra `index.html` en el navegador (doble clic) o use la versión publicada en GitHub Pages.
-2. Abra varias pestañas del **mismo navegador** para simular el sistema completo:
-   - una en **Emitir ticket** (kiosko),
-   - una o más en **Ventanilla** (cada pestaña puede ser una ventanilla distinta),
-   - una en **Pantalla** → botón *Abrir en ventana* para verla a pantalla completa.
-3. Las pestañas se sincronizan solas.
+```bash
+python server.py
+```
 
-> ⚠️ Al ser un prototipo sin base de datos, los datos **no se comparten entre equipos o navegadores distintos**.
-> Para uso real habría que agregar un backend (por ejemplo, una API con base de datos y WebSockets).
+Abra http://127.0.0.1:8080 y use varias pestañas (o varios equipos) a la vez:
+
+- `http://127.0.0.1:8080/#emitir` → kiosko
+- `http://127.0.0.1:8080/#ventanilla` → cada pestaña puede ser una ventanilla distinta
+- `http://127.0.0.1:8080/?modo=pantalla#pantalla` → pantalla pública a pantalla completa
+
+Todas las vistas se sincronizan con el servidor cada 2 segundos.
+
+### Opciones
+
+```bash
+python server.py --port 9000                   # otro puerto
+python server.py --host 0.0.0.0                # accesible desde otros equipos de la red
+TICKETERA_DB=/ruta/otra.db python server.py    # otra base de datos
+```
+
+> ⚠️ El servidor **no tiene usuarios ni contraseñas**. Use `--host 0.0.0.0` solo en una red de confianza.
+
+La base de datos se crea sola en `data/ticketera.db` (no se sube al repositorio).
+
+## API
+
+| Método | Ruta | Cuerpo | Descripción |
+|--------|------|--------|-------------|
+| GET | `/api/config` | — | Servicios y cantidad de ventanillas |
+| GET | `/api/state` | — | Todos los tickets y el último llamado |
+| POST | `/api/tickets` | `{ "service": "A", "name": "..." }` | Emite un ticket |
+| POST | `/api/desks/{n}/next` | `{ "services": ["P","A"] }` | Llama al siguiente turno |
+| POST | `/api/desks/{n}/recall` | — | Vuelve a llamar el turno actual |
+| POST | `/api/desks/{n}/finish` | `{ "status": "atendido" \| "ausente" }` | Cierra la atención |
+| DELETE | `/api/tickets` | — | Reinicia el día (borra todos los tickets) |
 
 ## Personalizar
 
-En `app.js`:
+En `server.py`:
 
 - `SERVICES`: agregue, quite o renombre servicios (la letra es el prefijo del ticket).
 - `DESK_COUNT`: cantidad de ventanillas.
@@ -39,7 +71,8 @@ Los colores de cada servicio están en `styles.css` (`--svc-P`, `--svc-A`, `--sv
 ## Archivos
 
 ```
+server.py    servidor HTTP + API + SQLite (librería estándar de Python)
 index.html   estructura de las 4 vistas
 styles.css   estilos
-app.js       lógica (estado, colas, render, sonido, CSV)
+app.js       interfaz: consume la API, render, sonido, CSV
 ```

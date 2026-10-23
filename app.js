@@ -1,17 +1,12 @@
 'use strict';
 
 // ---------- Configuración ----------
-const STORE_KEY = 'ticketera.v1';
+// Servicios y ventanillas los define el servidor (server.py) y se cargan en init().
 const DESK_KEY = 'ticketera.desk';
-const DESK_COUNT = 4;
+const REFRESH_MS = 2000;
 const VIEWS = ['emitir', 'ventanilla', 'pantalla', 'reporte'];
-
-// El orden define cómo se muestran; "priority" se atiende antes que el resto.
-const SERVICES = {
-  P: { name: 'Preferencial', desc: 'Adultos mayores, embarazadas y personas con discapacidad', priority: true },
-  A: { name: 'Atención general', desc: 'Consultas, trámites y reclamos' },
-  C: { name: 'Caja', desc: 'Pagos y cobros' },
-};
+let SERVICES = {};
+let DESK_COUNT = 0;
 
 const STATUS_LABEL = {
   espera: 'En espera',
@@ -22,33 +17,53 @@ const STATUS_LABEL = {
 
 const $ = (sel) => document.querySelector(sel);
 
-// ---------- Estado (localStorage) ----------
-function emptyState() {
-  return {
-    counters: Object.fromEntries(Object.keys(SERVICES).map((k) => [k, 0])),
-    tickets: [],
-    lastCall: null,
-  };
+// ---------- Estado (servidor SQLite) ----------
+let appState = { tickets: [], lastCall: null };
+let busy = false;
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
 }
 
-function load() {
+async function refresh() {
   try {
-    const state = JSON.parse(localStorage.getItem(STORE_KEY));
-    if (state && Array.isArray(state.tickets)) return state;
+    appState = await api('GET', '/api/state');
+    $('#offline').classList.add('hidden');
   } catch {
-    // Datos corruptos: se empieza de cero.
+    $('#offline').classList.remove('hidden');
   }
-  return emptyState();
+  render();
 }
 
-// Lee siempre el estado más reciente antes de modificarlo, así varias
-// pestañas (kiosko, ventanillas, pantalla) no se pisan entre sí.
-function update(mutator) {
-  const state = load();
-  const result = mutator(state);
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
-  render();
-  return result;
+// Ejecuta una acción en el servidor y vuelve a leer el estado.
+// "busy" evita dobles clics mientras la solicitud está en curso.
+async function act(request) {
+  if (busy) return null;
+  busy = true;
+  try {
+    return await request();
+  } catch (err) {
+    toast(err.message);
+    return null;
+  } finally {
+    busy = false;
+    await refresh();
+  }
+}
+
+function toast(message) {
+  const box = $('#toast');
+  box.textContent = message;
+  box.classList.remove('hidden');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => box.classList.add('hidden'), 3500);
 }
 
 // ---------- Utilidades ----------
@@ -66,14 +81,14 @@ function fmtDuration(ms) {
 }
 
 const svcStyle = (key) => `style="--svc-color: var(--svc-${key})"`;
-const svcTag = (key) => `<span class="tag" ${svcStyle(key)}>${esc(SERVICES[key].name)}</span>`;
-const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const svcTag = (key) => `<span class="tag" ${svcStyle(key)}>${esc(SERVICES[key]?.name ?? key)}</span>`;
 const average = (list) => (list.length ? list.reduce((a, b) => a + b, 0) / list.length : null);
 
+// Debe coincidir con el ORDER BY de call_next() en server.py.
 function queueOrder(a, b) {
-  const pa = SERVICES[a.service].priority ? 0 : 1;
-  const pb = SERVICES[b.service].priority ? 0 : 1;
-  return pa - pb || a.createdAt - b.createdAt;
+  const pa = SERVICES[a.service]?.priority ? 0 : 1;
+  const pb = SERVICES[b.service]?.priority ? 0 : 1;
+  return pa - pb || a.createdAt - b.createdAt || a.id - b.id;
 }
 
 function waitingList(state, services) {
@@ -85,67 +100,26 @@ function waitingList(state, services) {
 const currentTicket = (state, desk) => state.tickets.find((t) => t.status === 'llamado' && t.desk === desk);
 
 // ---------- Acciones ----------
-function issueTicket(service, name) {
-  return update((state) => {
-    state.counters[service] = (state.counters[service] || 0) + 1;
-    const ticket = {
-      id: newId(),
-      code: `${service}-${String(state.counters[service]).padStart(3, '0')}`,
-      service,
-      name: name.trim(),
-      status: 'espera',
-      desk: null,
-      calls: 0,
-      createdAt: Date.now(),
-      calledAt: null,
-      finishedAt: null,
-    };
-    state.tickets.push(ticket);
-    return ticket;
-  });
-}
-
-function markCalled(state, ticket) {
-  ticket.calls += 1;
-  ticket.calledAt = Date.now();
-  state.lastCall = { id: ticket.id, at: ticket.calledAt };
-}
+const issueTicket = (service, name) => act(() => api('POST', '/api/tickets', { service, name }));
 
 function callNext() {
   const { desk, services } = deskConfig();
-  update((state) => {
-    if (currentTicket(state, desk)) return;
-    const next = waitingList(state, services)[0];
-    if (!next) return;
-    next.status = 'llamado';
-    next.desk = desk;
-    markCalled(state, next);
-  });
+  return act(() => api('POST', `/api/desks/${desk}/next`, { services }));
 }
 
 function recall() {
-  const { desk } = deskConfig();
-  update((state) => {
-    const ticket = currentTicket(state, desk);
-    if (ticket) markCalled(state, ticket);
-  });
+  return act(() => api('POST', `/api/desks/${deskConfig().desk}/recall`));
 }
 
 function finish(status) {
-  const { desk } = deskConfig();
-  update((state) => {
-    const ticket = currentTicket(state, desk);
-    if (!ticket) return;
-    ticket.status = status;
-    ticket.finishedAt = Date.now();
-  });
+  return act(() => api('POST', `/api/desks/${deskConfig().desk}/finish`, { status }));
 }
 
 // ---------- Configuración de ventanilla (por pestaña) ----------
 function deskConfig() {
   try {
     const cfg = JSON.parse(sessionStorage.getItem(DESK_KEY));
-    if (cfg && cfg.desk) return cfg;
+    if (cfg && cfg.desk >= 1 && cfg.desk <= DESK_COUNT) return cfg;
   } catch {
     // Configuración inválida: se usa la predeterminada.
   }
@@ -158,16 +132,25 @@ function saveDeskConfig() {
   render();
 }
 
+// Reemplaza el HTML solo si cambió: el refresco periódico no recrea los botones
+// (un clic justo durante el redibujo se perdería).
+const lastHtml = new WeakMap();
+function setHtml(el, html) {
+  if (lastHtml.get(el) === html) return;
+  el.innerHTML = html;
+  lastHtml.set(el, html);
+}
+
 // ---------- Render: Emitir ----------
 let lastIssuedId = null;
 
 function renderEmitir(state) {
-  $('#service-buttons').innerHTML = Object.entries(SERVICES).map(([key, svc]) => `
+  setHtml($('#service-buttons'), Object.entries(SERVICES).map(([key, svc]) => `
     <button class="service-btn" type="button" data-service="${key}" ${svcStyle(key)}>
       <strong>${esc(svc.name)}</strong>
       <small>${esc(svc.desc)}</small>
       <span class="badge">${waitingList(state, [key]).length} en espera</span>
-    </button>`).join('');
+    </button>`).join(''));
 
   const box = $('#issued');
   const ticket = state.tickets.find((t) => t.id === lastIssuedId);
@@ -178,7 +161,7 @@ function renderEmitir(state) {
   const ahead = waitingList(state, [ticket.service]).findIndex((t) => t.id === ticket.id);
   box.classList.remove('hidden');
   box.setAttribute('style', `--svc-color: var(--svc-${ticket.service})`);
-  box.innerHTML = `
+  setHtml(box, `
     <p class="muted">Su turno es</p>
     <div class="code">${esc(ticket.code)}</div>
     <p>${svcTag(ticket.service)}</p>
@@ -187,7 +170,7 @@ function renderEmitir(state) {
     <p>${ahead >= 0
       ? `Personas antes que usted: <strong>${ahead}</strong>`
       : `Estado: <strong>${STATUS_LABEL[ticket.status]}</strong>`}</p>
-    <button class="btn ghost no-print" type="button" onclick="window.print()">🖨️ Imprimir</button>`;
+    <button class="btn ghost no-print" type="button" onclick="window.print()">🖨️ Imprimir</button>`);
 }
 
 // ---------- Render: Ventanilla ----------
@@ -199,7 +182,7 @@ function renderVentanilla(state) {
 
   if (current) {
     box.setAttribute('style', `--svc-color: var(--svc-${current.service})`);
-    box.innerHTML = `
+    setHtml(box, `
       <p class="muted">Atendiendo en ventanilla ${desk}</p>
       <div class="code">${esc(current.code)}</div>
       <div class="meta">
@@ -210,26 +193,26 @@ function renderVentanilla(state) {
         <button class="btn ok big" type="button" data-action="finish">✔ Finalizar atención</button>
         <button class="btn" type="button" data-action="recall">🔁 Volver a llamar</button>
         <button class="btn warn" type="button" data-action="absent">✖ No se presentó</button>
-      </div>`;
+      </div>`);
   } else {
     box.removeAttribute('style');
-    box.innerHTML = `
+    setHtml(box, `
       <p class="muted">Ventanilla ${desk} libre</p>
       <div class="code">—</div>
       <div class="meta">${services.length ? `${queue.length} persona(s) en espera para esta ventanilla` : 'Seleccione al menos un servicio'}</div>
       <div class="actions">
         <button class="btn big" type="button" data-action="next" ${queue.length ? '' : 'disabled'}>📣 Llamar siguiente</button>
-      </div>`;
+      </div>`);
   }
 
   $('#queue-count').textContent = queue.length;
-  $('#desk-queue').innerHTML = queue.length
+  setHtml($('#desk-queue'), queue.length
     ? queue.map((t) => `
         <li>
           <span><span class="code">${esc(t.code)}</span>${svcTag(t.service)} ${esc(t.name)}</span>
           <span class="muted">${fmtDuration(Date.now() - t.createdAt)}</span>
         </li>`).join('')
-    : '<li class="empty">No hay personas en espera</li>';
+    : '<li class="empty">No hay personas en espera</li>');
 }
 
 // ---------- Render: Pantalla ----------
@@ -273,24 +256,24 @@ function announce(ticket) {
 function renderPantalla(state) {
   const main = state.lastCall && state.tickets.find((t) => t.id === state.lastCall.id);
 
-  $('#display-main').innerHTML = main
+  setHtml($('#display-main'), main
     ? `<div class="label">Turno</div>
        <div class="code">${esc(main.code)}</div>
        <div class="desk">Ventanilla ${main.desk}</div>
        <p>${svcTag(main.service)}</p>`
-    : '<div class="label">Esperando turnos…</div>';
+    : '<div class="label">Esperando turnos…</div>');
 
   const history = state.tickets
-    .filter((t) => t.calledAt && t !== main)
-    .sort((a, b) => b.calledAt - a.calledAt)
+    .filter((t) => t.announcedAt && t !== main)
+    .sort((a, b) => b.announcedAt - a.announcedAt)
     .slice(0, 6);
-  $('#display-history').innerHTML = history.length
+  setHtml($('#display-history'), history.length
     ? history.map((t) => `<li><span>${esc(t.code)}</span><span>Ventanilla ${t.desk}</span></li>`).join('')
-    : '<li><span>—</span><span></span></li>';
+    : '<li><span>—</span><span></span></li>');
 
-  $('#display-waiting').innerHTML = Object.keys(SERVICES)
+  setHtml($('#display-waiting'), Object.keys(SERVICES)
     .map((key) => `<span class="tag" ${svcStyle(key)}>${esc(SERVICES[key].name)}: ${waitingList(state, [key]).length}</span>`)
-    .join('');
+    .join(''));
 
   const callKey = state.lastCall ? `${state.lastCall.id}@${state.lastCall.at}` : null;
   if (callKey !== seenCall) {
@@ -332,20 +315,20 @@ function renderReporte(state) {
     ['Espera promedio', fmtDuration(s.avgWait)],
     ['Atención promedio', fmtDuration(s.avgService)],
   ];
-  $('#stats').innerHTML = stats
+  setHtml($('#stats'), stats
     .map(([label, value]) => `<div class="stat"><div class="value">${value}</div><div class="label">${label}</div></div>`)
-    .join('');
+    .join(''));
 
-  $('#service-table').innerHTML = `
+  setHtml($('#service-table'), `
     <tr><th>Servicio</th><th>Emitidos</th><th>En espera</th><th>Atendidos</th><th>Ausentes</th><th>Espera prom.</th><th>Atención prom.</th></tr>
     ${Object.keys(SERVICES).map((key) => {
       const r = summarize(state.tickets.filter((t) => t.service === key));
       return `<tr><td>${svcTag(key)}</td><td>${r.total}</td><td>${r.espera}</td><td>${r.atendido}</td><td>${r.ausente}</td>
         <td>${fmtDuration(r.avgWait)}</td><td>${fmtDuration(r.avgService)}</td></tr>`;
-    }).join('')}`;
+    }).join('')}`);
 
   const rows = [...state.tickets].sort((a, b) => b.createdAt - a.createdAt);
-  $('#history-table').innerHTML = `
+  setHtml($('#history-table'), `
     <tr><th>Ticket</th><th>Servicio</th><th>Nombre</th><th>Estado</th><th>Ventanilla</th><th>Emitido</th><th>Llamado</th><th>Finalizado</th><th>Espera</th></tr>
     ${rows.length ? rows.map((t) => `
       <tr>
@@ -358,11 +341,11 @@ function renderReporte(state) {
         <td>${fmtTime(t.calledAt)}</td>
         <td>${fmtTime(t.finishedAt)}</td>
         <td>${fmtDuration(ticketDurations(t).wait ?? Date.now() - t.createdAt)}</td>
-      </tr>`).join('') : '<tr><td class="empty" colspan="9">Aún no se emiten tickets</td></tr>'}`;
+      </tr>`).join('') : '<tr><td class="empty" colspan="9">Aún no se emiten tickets</td></tr>'}`);
 }
 
 function exportCsv() {
-  const state = load();
+  const state = appState;
   const toMin = (ms) => (ms == null ? '' : (ms / 60000).toFixed(1));
   const fmtDate = (ts) => (ts ? new Date(ts).toLocaleString('es') : '');
   // Evita que Excel interprete nombres como fórmulas.
@@ -405,19 +388,26 @@ function showView() {
 }
 
 function render() {
-  const state = load();
-  renderEmitir(state);
-  renderVentanilla(state);
-  renderPantalla(state);
-  renderReporte(state);
+  renderEmitir(appState);
+  renderVentanilla(appState);
+  renderPantalla(appState);
+  renderReporte(appState);
 }
 
 function tickClock() {
   $('#clock').textContent = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function init() {
+async function init() {
   if (isKiosk) document.body.classList.add('kiosk');
+
+  try {
+    ({ services: SERVICES, deskCount: DESK_COUNT } = await api('GET', '/api/config'));
+  } catch {
+    $('#offline').classList.remove('hidden');
+    $('main').innerHTML = '<div class="card">No se pudo conectar con el servidor. Inicie <code>python server.py</code> y recargue la página.</div>';
+    return;
+  }
 
   // Configuración de ventanilla (controles fijos, no se re-renderizan).
   const cfg = deskConfig();
@@ -428,11 +418,13 @@ function init() {
   $('#desk-select').addEventListener('change', saveDeskConfig);
   $('#desk-services').addEventListener('change', saveDeskConfig);
 
-  $('#service-buttons').addEventListener('click', (e) => {
+  $('#service-buttons').addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-service]');
     if (!btn) return;
     const nameInput = $('#customer-name');
-    lastIssuedId = issueTicket(btn.dataset.service, nameInput.value).id;
+    const ticket = await issueTicket(btn.dataset.service, nameInput.value);
+    if (!ticket) return;
+    lastIssuedId = ticket.id;
     nameInput.value = '';
     render();
   });
@@ -454,21 +446,18 @@ function init() {
   $('#export-btn').addEventListener('click', exportCsv);
   $('#reset-btn').addEventListener('click', () => {
     if (!confirm('¿Borrar todos los tickets y reiniciar la numeración?')) return;
-    localStorage.removeItem(STORE_KEY);
     lastIssuedId = null;
-    render();
+    act(() => api('DELETE', '/api/tickets'));
   });
 
-  // Sincronización entre pestañas + refresco periódico de tiempos.
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORE_KEY || e.key === null) render();
-  });
+  // Sincronización con el servidor (sondeo) + reloj.
   window.addEventListener('hashchange', showView);
-  setInterval(render, 2000);
+  setInterval(refresh, REFRESH_MS);
   setInterval(tickClock, 1000);
 
   seenCall = undefined; // no anunciar el último llamado al abrir la página
   tickClock();
+  await refresh(); // el primer render ya llega con los datos del servidor
   showView();
 }
 

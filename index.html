@@ -84,7 +84,10 @@
     </section>
   </main>
 
-  <footer class="foot">Prototipo sin base de datos · los datos se guardan solo en este navegador (localStorage)</footer>
+  <div id="offline" class="offline hidden">⚠ Sin conexión con el servidor · reintentando…</div>
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <footer class="foot">Prototipo · datos guardados en SQLite (server.py)</footer>
 
   <script src="app.js"></script>
 </body>

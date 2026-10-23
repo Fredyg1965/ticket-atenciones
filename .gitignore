@@ -13,3 +13,12 @@ Thumbs.db
 .DS_Store
 .vscode/
 node_modules/
+
+# Base de datos SQLite local (se crea al iniciar server.py)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
