@@ -1,0 +1,15 @@
+# Instrucciones locales de Claude (no publicar)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Variables de entorno y secretos
+.env
+.env.*
+*.env
+
+# Sistema / editor
+Thumbs.db
+.DS_Store
+.vscode/
+node_modules/
